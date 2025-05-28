@@ -1,0 +1,9 @@
+# SpecStory explanation file
+.specstory/.what-is-this.md
+node_modules
+.env
+dist
+build
+.DS_Store
+last_update_id.txt
+*.tsbuildinfo
