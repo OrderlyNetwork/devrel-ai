@@ -12,7 +12,10 @@ const LAST_UPDATE_ID_FILE = path.resolve(process.cwd(), 'last_update_id.txt');
 const DOCS_URL = 'https://orderly.network/docs/llms-full.txt';
 const DOCS_BASE_URL = 'https://orderly.network/docs';
 const MAX_FUSE_RESULTS = 7;
-const MAX_CONTEXT_CHARACTERS = 15000;
+const MAX_DOC_CONTEXT_CHARACTERS = 10000;
+const MAX_KB_CONTEXT_CHARACTERS = 5000;
+const MAX_KNOWLEDGE_RESULTS = 15;
+const KNOWLEDGE_FILE_PATH = path.resolve(process.cwd(), 'knowledge.json');
 const MAX_HISTORY_MESSAGES = 10;
 
 // Zod Schema for Classification Response
@@ -27,10 +30,19 @@ const ClassificationResponseSchema = z.object({
   requestType: RequestTypeEnum,
 });
 
+// Knowledge Base Item Interface
+interface KnowledgeItem {
+  question: string;
+  answer: string;
+  last_referenced_date: string;
+}
+
 // Global state
 let rawDocumentationContent: string = '';
 let preparedDocChunks: string[] = [];
 let fuseInstance: Fuse<string> | null = null;
+let knowledgeBase: KnowledgeItem[] = [];
+let knowledgeFuseInstance: Fuse<KnowledgeItem> | null = null;
 let aiClient: OpenAI | null = null;
 const chatHistories: Record<number, OpenAI.Chat.Completions.ChatCompletionMessageParam[]> = {};
 
@@ -97,6 +109,29 @@ async function initializeDocumentation(): Promise<void> {
   }
 }
 
+async function initializeKnowledgeBase(): Promise<void> {
+  try {
+    console.log(`Loading knowledge base from ${KNOWLEDGE_FILE_PATH}...`);
+    const fileContent = await fs.readFile(KNOWLEDGE_FILE_PATH, 'utf8');
+    knowledgeBase = JSON.parse(fileContent) as KnowledgeItem[];
+    if (knowledgeBase.length > 0) {
+      const fuseOptions: IFuseOptions<KnowledgeItem> = {
+        includeScore: true,
+        threshold: 0.6,
+        ignoreLocation: true,
+        keys: ['question'],
+      };
+      knowledgeFuseInstance = new Fuse(knowledgeBase, fuseOptions);
+      console.log(`Knowledge base initialized with ${knowledgeBase.length} Q&A items.`);
+    } else {
+      console.log('Knowledge base is empty or failed to load. Q&A search will not be available.');
+    }
+  } catch (error) {
+    console.error('Error loading or initializing knowledge base:', error);
+    knowledgeFuseInstance = null;
+  }
+}
+
 async function readLastUpdateId(): Promise<number> {
   try {
     const data = await fs.readFile(LAST_UPDATE_ID_FILE, 'utf8');
@@ -157,7 +192,6 @@ function escapeForMarkdownV2(text: string): string {
   escapedText = escapedText.replace(/\]/g, '\\]');
   escapedText = escapedText.replace(/\(/g, '\\(');
   escapedText = escapedText.replace(/\)/g, '\\)');
-  console.log('escapedText', escapedText);
 
   // Step 4: Restore Markdown links from placeholders
   for (let i = 0; i < links.length; i++) {
@@ -275,6 +309,9 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
   let shouldMakeSecondAICall = true;
   let predefinedResponse = '';
 
+  const orderlyNetworkDefinition =
+    'Orderly Network is a permissionless, omnichain Central Limit Order Book (CLOB) infrastructure that unifies liquidity across multiple blockchains, delivering CEX-level performance, security, and composability with DEX transparency for seamless dApp integration.';
+
   const markdownInstructionsForTables = `\n- TABLES: Telegram does not render standard markdown tables (e.g., using pipes |). If you need to present tabular data, please use one of these alternatives:\n  - A series of bulleted lists (e.g., one list per conceptual row). Use a hyphen (-) followed by a space for each list item (e.g., "- First item").\n  - A pre-formatted fixed-width text block (using triple backticks \`\`\`) where you manually align columns with spaces to simulate a table.\n  - Describe the data in paragraph form if it's simple.\n  - **Do NOT use markdown pipe table syntax (e.g., | Header | Header |).**\n\n- GENERAL MARKDOWN & SPECIAL CHARACTERS: Use Markdown formatting (like *bold*, _italics_, - lists) only when necessary for readability. In all other text, do not use any special characters except for standard punctuation (e.g., '.', ',', '?', '!'). Avoid special characters like \`*\`-, \`_\` if they are not part of a Markdown formatting instruction`;
 
   if (requestType === 'documentation_query') {
@@ -292,7 +329,7 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
       for (const result of topResults) {
         const chunk = result.item;
         const lengthWithSeparator = concatenatedParagraphs.length > 0 ? separator.length : 0;
-        if (currentLength + chunk.length + lengthWithSeparator <= MAX_CONTEXT_CHARACTERS) {
+        if (currentLength + chunk.length + lengthWithSeparator <= MAX_DOC_CONTEXT_CHARACTERS) {
           if (concatenatedParagraphs.length > 0) concatenatedParagraphs += separator;
           concatenatedParagraphs += chunk;
           currentLength = concatenatedParagraphs.length;
@@ -300,14 +337,34 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
       }
       if (concatenatedParagraphs.length > 0) relevantParagraphsForPrompt = concatenatedParagraphs;
     }
-    systemPromptContent = `You are the Orderly Network Documentation Helper, an AI assistant expert in Orderly Network. Your role is to answer user questions accurately using only the Orderly Network information provided below and the conversation history.\nKey Instructions:\n1. Answer directly and concisely if the information is available in the provided text or conversation history.\n2. If the specific information needed to answer is not present in the provided text or history, clearly state that you do not have that specific information. Do not apologize.\n3. Do NOT invent answers or use any external knowledge beyond what is provided here.\n4. **CRITICAL: Absolutely do NOT mention that you are basing your answer on "provided excerpts," "documentation excerpts," "information provided," or any similar phrases referring to your source material. Simply provide the answer as the expert.**\n5. Do NOT suggest the user refer to external Orderly Network documentation, websites, or support channels. You ARE the direct source for this information.\n${markdownInstructionsForTables}\n\n[Use the following Orderly Network information and conversation history to answer the user's current question]\nRelevant Information from Documentation:\n${relevantParagraphsForPrompt}`;
+
+    let knowledgeBaseContentForPrompt = 'No relevant Q&A found in the knowledge base for your query.';
+    if (knowledgeFuseInstance) {
+      const knowledgeSearchResults = knowledgeFuseInstance.search(userQuery);
+      if (knowledgeSearchResults.length > 0) {
+        const topKnowledgeResults = knowledgeSearchResults.slice(0, MAX_KNOWLEDGE_RESULTS);
+        let concatenatedKnowledge = '';
+        const separator = '\n\n---\n\n';
+        for (const result of topKnowledgeResults) {
+          const qaPair = `Q: ${result.item.question}\nA: ${result.item.answer}`;
+          const lengthWithSeparator = concatenatedKnowledge.length > 0 ? separator.length : 0;
+          if (concatenatedKnowledge.length + qaPair.length + lengthWithSeparator <= MAX_KB_CONTEXT_CHARACTERS) {
+            if (concatenatedKnowledge.length > 0) concatenatedKnowledge += separator;
+            concatenatedKnowledge += qaPair;
+          } else break;
+        }
+        if (concatenatedKnowledge.length > 0) knowledgeBaseContentForPrompt = concatenatedKnowledge;
+      }
+    }
+
+    systemPromptContent = `${orderlyNetworkDefinition}\n\nYou are the Orderly Network Documentation Helper, an AI assistant expert in Orderly Network. Your role is to answer user questions accurately using only the Orderly Network information provided below and the conversation history.\nKey Instructions:\n1. Answer directly and concisely if the information is available in the provided text or conversation history.\n2. If the specific information needed to answer is not present in the provided text or history, clearly state that you do not have that specific information. Do not apologize.\n3. Do NOT invent answers or use any external knowledge beyond what is provided here.\n4. **CRITICAL: Absolutely do NOT mention that you are basing your answer on "provided excerpts," "documentation excerpts," "information provided," "Knowledge Base," "Q&A section," or any similar phrases referring to your source material. Simply provide the answer as the expert.**\n5. Do NOT suggest the user refer to external Orderly Network documentation, websites, support channels, or a "Q&A section" or "Knowledge Base" as if it's a separate browsable resource. You ARE the direct source for this information.\n${markdownInstructionsForTables}\n\n[Use the following Orderly Network information and conversation history to answer the user's current question]\n\nRelevant Information from Documentation:\n${relevantParagraphsForPrompt}\n\nRelevant Q&A from Knowledge Base:\n${knowledgeBaseContentForPrompt}`;
     messagesForAnsweringAI = [
       { role: 'system', content: systemPromptContent },
       ...(chatHistories[chatId] || []),
       { role: 'user', content: userQuery },
     ];
   } else if (requestType === 'bot_related_inquiry') {
-    systemPromptContent = `You are a friendly and helpful AI assistant for Orderly Network. The user is interacting with you directly (e.g., greeting, asking about your capabilities). Respond naturally and concisely based on the conversation history. If asked about your capabilities, state that you are the Orderly Network Documentation Helper and can answer questions about Orderly Network using its official documentation.\n${markdownInstructionsForTables}`;
+    systemPromptContent = `${orderlyNetworkDefinition}\n\nYou are a friendly and helpful AI assistant for Orderly Network. The user is interacting with you directly (e.g., greeting, asking about your capabilities). Respond naturally and concisely based on the conversation history. If asked about your capabilities, state that you are the Orderly Network Documentation Helper and can answer questions about Orderly Network using its official documentation.\n${markdownInstructionsForTables}`;
     messagesForAnsweringAI = [
       { role: 'system', content: systemPromptContent },
       ...(chatHistories[chatId] || []),
@@ -318,7 +375,6 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
       "It sounds like you're asking about Broker ID setup. This requires specific attention. Please reach out to the Orderly Network DevRel team directly via [Official DevRel Contact Channel - e.g., Discord/Telegram group/email].";
     shouldMakeSecondAICall = false;
   } else if (requestType === 'unrelated_query') {
-    console.log('Query classified as unrelated. No reply will be sent.');
     shouldMakeSecondAICall = false;
     predefinedResponse = '';
     return;
@@ -338,7 +394,7 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
       for (const result of topResults) {
         const chunk = result.item;
         const lengthWithSeparator = concatenatedParagraphs.length > 0 ? separator.length : 0;
-        if (currentLength + chunk.length + lengthWithSeparator <= MAX_CONTEXT_CHARACTERS) {
+        if (currentLength + chunk.length + lengthWithSeparator <= MAX_DOC_CONTEXT_CHARACTERS) {
           if (concatenatedParagraphs.length > 0) concatenatedParagraphs += separator;
           concatenatedParagraphs += chunk;
           currentLength = concatenatedParagraphs.length;
@@ -346,7 +402,26 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
       }
       if (concatenatedParagraphs.length > 0) relevantParagraphsForPrompt = concatenatedParagraphs;
     }
-    systemPromptContent = `You are the Orderly Network Documentation Helper, an AI assistant expert in Orderly Network. Your role is to answer user questions accurately using only the Orderly Network information provided below and the conversation history.\nKey Instructions:\n1. Answer directly and concisely if the information is available in the provided text or conversation history.\n2. If the specific information needed to answer is not present in the provided text or history, clearly state that you do not have that specific information. Do not apologize.\n3. Do NOT invent answers or use any external knowledge beyond what is provided here.\n4. **CRITICAL: Absolutely do NOT mention that you are basing your answer on "provided excerpts," "documentation excerpts," "information provided," or any similar phrases referring to your source material. Simply provide the answer as the expert.**\n5. Do NOT suggest the user refer to external Orderly Network documentation, websites, or support channels. You ARE the direct source for this information.\n${markdownInstructionsForTables}\n\n[Use the following Orderly Network information and conversation history to answer the user's current question]\nRelevant Information from Documentation:\n${relevantParagraphsForPrompt}`;
+
+    let knowledgeBaseContentForPrompt = 'No relevant Q&A found in the knowledge base for your query (fallback path).';
+    if (knowledgeFuseInstance) {
+      const knowledgeSearchResults = knowledgeFuseInstance.search(userQuery);
+      if (knowledgeSearchResults.length > 0) {
+        const topKnowledgeResults = knowledgeSearchResults.slice(0, MAX_KNOWLEDGE_RESULTS);
+        let concatenatedKnowledge = '';
+        const separator = '\n\n---\n\n';
+        for (const result of topKnowledgeResults) {
+          const qaPair = `Q: ${result.item.question}\nA: ${result.item.answer}`;
+          const lengthWithSeparator = concatenatedKnowledge.length > 0 ? separator.length : 0;
+          if (concatenatedKnowledge.length + qaPair.length + lengthWithSeparator <= MAX_KB_CONTEXT_CHARACTERS) {
+            if (concatenatedKnowledge.length > 0) concatenatedKnowledge += separator;
+            concatenatedKnowledge += qaPair;
+          } else break;
+        }
+        if (concatenatedKnowledge.length > 0) knowledgeBaseContentForPrompt = concatenatedKnowledge;
+      }
+    }
+    systemPromptContent = `${orderlyNetworkDefinition}\n\nYou are the Orderly Network Documentation Helper, an AI assistant expert in Orderly Network. Your role is to answer user questions accurately using only the Orderly Network information provided below and the conversation history.\nKey Instructions:\n1. Answer directly and concisely if the information is available in the provided text or conversation history.\n2. If the specific information needed to answer is not present in the provided text or history, clearly state that you do not have that specific information. Do not apologize.\n3. Do NOT invent answers or use any external knowledge beyond what is provided here.\n4. **CRITICAL: Absolutely do NOT mention that you are basing your answer on "provided excerpts," "documentation excerpts," "information provided," "Knowledge Base," "Q&A section," or any similar phrases referring to your source material. Simply provide the answer as the expert.**\n5. Do NOT suggest the user refer to external Orderly Network documentation, websites, support channels, or a "Q&A section" or "Knowledge Base" as if it's a separate browsable resource. You ARE the direct source for this information.\n${markdownInstructionsForTables}\n\n[Use the following Orderly Network information and conversation history to answer the user's current question]\n\nRelevant Information from Documentation:\n${relevantParagraphsForPrompt}\n\nRelevant Q&A from Knowledge Base:\n${knowledgeBaseContentForPrompt}`;
     messagesForAnsweringAI = [
       { role: 'system', content: systemPromptContent },
       ...(chatHistories[chatId] || []),
@@ -427,6 +502,7 @@ console.log('Initializing bot with manual update polling...');
 
 async function main() {
   await initializeDocumentation();
+  await initializeKnowledgeBase();
   pollUpdates().catch((error) => {
     console.error('Critical error in polling loop. Exiting.', error);
     process.exit(1);
