@@ -372,7 +372,7 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
     ];
   } else if (requestType === 'broker_id_setup_inquiry') {
     predefinedResponse =
-      "It sounds like you're asking about Broker ID setup. This requires specific attention. Please reach out to the Orderly Network DevRel team directly via [Official DevRel Contact Channel - e.g., Discord/Telegram group/email].";
+      "It sounds like you're asking about Broker ID setup. This requires specific attention. I've notified @Orderly_Wuzhong and @Mario_Orderly to assist you.";
     shouldMakeSecondAICall = false;
   } else if (requestType === 'unrelated_query') {
     shouldMakeSecondAICall = false;
