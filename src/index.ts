@@ -246,11 +246,11 @@ bot.on(message('text'), async (ctx) => {
 
   let requestType: z.infer<typeof RequestTypeEnum> = 'documentation_query';
   try {
-    const classificationSystemPrompt = `Your task is to classify the user's query into ONE of the following categories:
-1. "documentation_query": The user is asking a question about Orderly Network's features, SDKs, APIs, technical details, how to build/use Orderly Network, or other topics likely covered in general technical documentation.
+    const classificationSystemPrompt = `Your task is to classify the user\'s query into ONE of the following categories:
+1. "documentation_query": The user is asking a question about Orderly Network\'s features, SDKs, APIs, technical details, how to build/use Orderly Network, or other topics likely covered in general technical documentation.
 2. "bot_related_inquiry": The user is asking a meta-question about you (the bot, e.g., "who are you?", "what can you do?"), a greeting, or engaging in simple conversation related to your function as an assistant.
 3. "broker_id_setup_inquiry": The user is specifically asking about setting up a Broker ID, issues related to becoming a broker, or the broker application process for Orderly Network.
-4. "unrelated_query": The user is asking a question completely unrelated to Orderly Network or your functions as a documentation and Orderly Network assistant.
+4. "unrelated_query": The user's message is not a question or request *directed at you, the AI assistant*. This includes:\n    - Messages that are part of an ongoing conversation between *other users*.\n    - Direct instructions or requests *to other human users*, even if phrased with a question (e.g., "John, can you send me the file?", "Team, what's the status on X?", "Could you (the broker) please set this up for me?").\n    - General commentary not requiring an AI response.\n    - Topics completely unrelated to Orderly Network or your functions as an assistant.\n    If a message contains a question but is clearly addressed to someone other than the AI assistant, it is an "unrelated_query".
 
 You MUST respond *only* with a single, valid JSON object. This JSON object must contain exactly one key named "requestType". The value for "requestType" MUST be one of the following exact strings: "documentation_query", "bot_related_inquiry", "broker_id_setup_inquiry", or "unrelated_query".
 
@@ -372,7 +372,7 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
     ];
   } else if (requestType === 'broker_id_setup_inquiry') {
     predefinedResponse =
-      "It sounds like you're asking about Broker ID setup. This requires specific attention. I've notified @Orderly_Wuzhong and @Mario_Orderly to assist you.";
+      "It sounds like you're asking about Broker ID setup. This requires specific attention. I've notified @Orderly\\_Wuzhong and @Mario\\_Orderly to assist you.";
     shouldMakeSecondAICall = false;
   } else if (requestType === 'unrelated_query') {
     shouldMakeSecondAICall = false;
