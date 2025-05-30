@@ -1,0 +1,8 @@
+node_modules
+telegram_chat_exports
+result.json
+.specstory
+.env
+.gitignore
+.dockerignore
+Dockerfile
