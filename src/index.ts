@@ -269,7 +269,7 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
     ];
 
     const classificationCompletion = await aiClient.chat.completions.create({
-      model: 'llama-4-scout-17b-16e-instruct',
+      model: 'qwen-3-235b-a22b-instruct-2507',
       messages: classificationMessages,
       temperature: 0.1,
       response_format: { type: 'json_object' },
@@ -432,7 +432,7 @@ Do NOT include any other text, explanation, apologies, markdown formatting, or c
   if (shouldMakeSecondAICall && messagesForAnsweringAI) {
     try {
       const chatCompletion = await aiClient.chat.completions.create({
-        model: 'llama-4-scout-17b-16e-instruct',
+        model: 'qwen-3-235b-a22b-instruct-2507',
         messages: messagesForAnsweringAI,
       });
       const aiResponse = chatCompletion.choices[0]?.message?.content;
